@@ -4,6 +4,7 @@ const connectDB = require("./config/db");
 const bookingRoutes = require("./routes/booking");
 const serviceRoutes = require("./routes/service");
 const authRoutes = require("./routes/auth");
+
 require("dotenv").config();
 
 const app = express();
