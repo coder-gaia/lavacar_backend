@@ -2,6 +2,7 @@
 const Booking = require("../models/Booking");
 const Service = require("../models/Service");
 const WorkingHours = require("../models/WorkingHours");
+const CustomSlot = require("../models/CustomSlot");
 
 const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
 
@@ -108,19 +109,34 @@ exports.getAvailableSlots = async (req, res) => {
     return res.status(400).json({ message: "Missing date or serviceId." });
   }
 
+  // Converte data da query para Date e monta dayKey
+  const [year, month, day] = date.split("-").map(Number);
+  const dayDate = new Date(year, month - 1, day);
+  const dayKey = `${year.toString().padStart(4, "0")}-${month
+    .toString()
+    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+  const weekday = dayDate.getDay().toString(); // '0' a '6'
+
+  // Verifica se existe slot customizado para a data
+  const custom = await CustomSlot.findOne({ date: dayKey });
+  if (custom) {
+    return res.status(200).json(
+      custom.slots.map((slot) => {
+        const [hour, minute] = slot.split(":");
+        const customDate = new Date(date);
+        customDate.setHours(Number(hour), Number(minute), 0, 0);
+        return customDate.toISOString();
+      })
+    );
+  }
+
   const service = await Service.findById(serviceId);
   if (!service) {
     return res.status(404).json({ message: "Service not found." });
   }
   const desiredDuration = service.duration;
 
-  const [year, month, day] = date.split("-").map(Number);
-  const dayDate = new Date(year, month - 1, day);
-  const dayKey = `${year.toString().padStart(4, "0")}-${month
-    .toString()
-    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
-  const weekday = dayDate.getDay().toString(); // '0'..'6'
-
+  // Verifica se há exceção no horário do dia
   let hours = await WorkingHours.findOne({ type: "exception", day: dayKey });
   if (!hours) {
     hours = await WorkingHours.findOne({ type: "weekly", day: weekday });
