@@ -161,17 +161,17 @@ exports.getAvailableSlots = async (req, res) => {
   });
 
   const slots = [];
-  let pointer = cursor.getTime();
+  let pointer = cursor;
   const endMs = closing.getTime();
 
   while (pointer + desiredDuration * 60000 <= endMs) {
-    const slotStart = pointer;
-    const slotEnd = slotStart + desiredDuration * 60000;
+    const tmp = new Date(pointer);
+    const h = String(tmp.getHours()).padStart(2, "0");
+    const m = String(tmp.getMinutes()).padStart(2, "0");
 
-    const free = occupied.every(
-      (o) => slotStart >= o.end || slotEnd <= o.start
-    );
-    if (free) slots.push(new Date(slotStart).toISOString());
+    const isoWithOffset = `${dayKey}T${h}:${m}:00-03:00`;
+    slots.push(new Date(isoWithOffset).toISOString());
+
     pointer += desiredDuration * 60000;
   }
 
