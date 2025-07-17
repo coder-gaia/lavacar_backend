@@ -14,6 +14,23 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://lavacar-fast-c88becugm-codergaias-projects.vercel.app",
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+  })
+);
+
 async function ensureDefaultWorkingHours() {
   const count = await WorkingHours.countDocuments({ type: "weekly" });
   if (count === 0) {

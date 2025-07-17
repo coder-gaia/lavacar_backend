@@ -1,4 +1,3 @@
-// controllers/bookingController.js
 const Booking = require("../models/Booking");
 const Service = require("../models/Service");
 const WorkingHours = require("../models/WorkingHours");
