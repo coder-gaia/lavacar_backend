@@ -109,69 +109,94 @@ exports.getAvailableSlots = async (req, res) => {
     return res.status(400).json({ message: "Missing date or serviceId." });
   }
 
-  // Converte data da query para Date e monta dayKey
+  // 1) Parse da data e dayKey
   const [year, month, day] = date.split("-").map(Number);
-  const dayDate = new Date(year, month - 1, day);
-  const dayKey = `${year.toString().padStart(4, "0")}-${month
-    .toString()
-    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
-  const weekday = dayDate.getDay().toString(); // '0' a '6'
+  // mês no JS é 0-indexed
+  const dayKey = `${String(year).padStart(4, "0")}-${String(month).padStart(
+    2,
+    "0"
+  )}-${String(day).padStart(2, "0")}`;
+  const weekday = new Date(year, month - 1, day).getDay().toString(); // "0".. "6"
 
-  // Verifica se existe slot customizado para a data
+  // 2) Busca CustomSlot (exceções de horário com lista de slots exatos)
   const custom = await CustomSlot.findOne({ date: dayKey });
   if (custom) {
-    return res.status(200).json(
-      custom.slots.map((slot) => {
-        const [hour, minute] = slot.split(":");
-        const customDate = new Date(date);
-        customDate.setHours(Number(hour), Number(minute), 0, 0);
-        return customDate.toISOString();
-      })
-    );
+    const slots = custom.slots.map((slot) => {
+      const [h, m] = slot.split(":").map(Number);
+      // cria no timezone local do servidor
+      const slotDate = new Date(year, month - 1, day, h, m, 0, 0);
+      return slotDate.toISOString();
+    });
+    return res.json(slots);
   }
 
+  // 3) Busca serviço
   const service = await Service.findById(serviceId);
   if (!service) {
     return res.status(404).json({ message: "Service not found." });
   }
-  const desiredDuration = service.duration;
+  const desiredDuration = service.duration; // em minutos
 
-  // Verifica se há exceção no horário do dia
+  // 4) Busca exceção em WorkingHours ou padrão semanal
   let hours = await WorkingHours.findOne({ type: "exception", day: dayKey });
   if (!hours) {
     hours = await WorkingHours.findOne({ type: "weekly", day: weekday });
   }
+  // se dia fechado ou inválido, retorna vazio
   if (!hours || hours.startHour >= hours.endHour) {
     return res.json([]);
   }
 
-  const cursor = new Date(dayDate);
-  cursor.setHours(hours.startHour, 0, 0, 0);
-  const closing = new Date(dayDate);
-  closing.setHours(hours.endHour, 0, 0, 0);
+  // 5) Define início e fim do expediente no timezone local
+  const startMs = new Date(
+    year,
+    month - 1,
+    day,
+    hours.startHour,
+    0,
+    0,
+    0
+  ).getTime();
+  const endMs = new Date(
+    year,
+    month - 1,
+    day,
+    hours.endHour,
+    0,
+    0,
+    0
+  ).getTime();
 
+  // 6) Busca bookings existentes no intervalo
   const bookings = await Booking.find({
-    dateTime: { $gte: cursor, $lte: closing },
+    dateTime: {
+      $gte: new Date(startMs),
+      $lte: new Date(endMs),
+    },
+    status: "pending",
   }).populate("service", "duration");
 
+  // 7) Mapeia intervalos ocupados
   const occupied = bookings.map((b) => {
-    const start = b.dateTime.getTime();
-    const end = start + b.service.duration * 60000;
-    return { start, end };
+    const bStart = b.dateTime.getTime();
+    const bEnd = bStart + b.service.duration * 60000;
+    return { start: bStart, end: bEnd };
   });
 
+  // 8) Gera slots livres
   const slots = [];
-  let pointer = cursor;
-  const endMs = closing.getTime();
-
+  let pointer = startMs;
   while (pointer + desiredDuration * 60000 <= endMs) {
-    const tmp = new Date(pointer);
-    const h = String(tmp.getHours()).padStart(2, "0");
-    const m = String(tmp.getMinutes()).padStart(2, "0");
+    const slotStart = pointer;
+    const slotEnd = slotStart + desiredDuration * 60000;
 
-    const isoWithOffset = `${dayKey}T${h}:${m}:00-03:00`;
-    slots.push(new Date(isoWithOffset).toISOString());
-
+    const free = occupied.every(
+      (o) => slotStart >= o.end || slotEnd <= o.start
+    );
+    if (free) {
+      const dt = new Date(slotStart);
+      slots.push(dt.toISOString());
+    }
     pointer += desiredDuration * 60000;
   }
 
