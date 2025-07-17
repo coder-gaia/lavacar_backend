@@ -17,7 +17,6 @@ app.use(express.json());
 const allowedOrigins = [
   "http://localhost:5173",
   "https://lavacar-fast.vercel.app/",
-  "https://lavacar-fast-6kd5vkgb1-codergaias-projects.vercel.app/",
 ];
 
 app.use(
