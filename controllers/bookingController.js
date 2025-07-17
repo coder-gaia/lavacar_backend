@@ -1,20 +1,22 @@
+// controllers/bookingController.js
 const Booking = require("../models/Booking");
 const Service = require("../models/Service");
+const WorkingHours = require("../models/WorkingHours");
+
+const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
 
 exports.createBooking = async (req, res) => {
   const { clientName, serviceId, dateTime, observation } = req.body;
   try {
-    //checks if the service exists and takes the duration
     const service = await Service.findById(serviceId);
-    if (!service) {
+    if (!service)
       return res.status(404).json({ message: "Service not found." });
-    }
+
     const desiredStart = new Date(dateTime);
     const desiredEnd = new Date(
       desiredStart.getTime() + service.duration * 60000
     );
 
-    //search for all the pending bookings of the day
     const dayStart = new Date(desiredStart);
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(desiredStart);
@@ -24,10 +26,6 @@ exports.createBooking = async (req, res) => {
       status: "pending",
       dateTime: { $gte: dayStart, $lte: dayEnd },
     }).populate("service", "duration");
-
-    //checks overlaps
-    const overlaps = (aStart, aEnd, bStart, bEnd) =>
-      aStart < bEnd && bStart < aEnd;
 
     const conflict = existing.find((b) => {
       const bStart = b.dateTime.getTime();
@@ -47,7 +45,6 @@ exports.createBooking = async (req, res) => {
       });
     }
 
-    // if there's no conflict, it books normally
     const booking = await Booking.create({
       clientName,
       service: serviceId,
@@ -71,7 +68,7 @@ exports.getTodayBookings = async (req, res) => {
     dateTime: { $gte: start, $lte: end },
     status: "pending",
   })
-    .sort({ datetime: 1 })
+    .sort({ dateTime: 1 })
     .populate("service", "name price duration");
 
   res.json(bookings);
@@ -80,9 +77,7 @@ exports.getTodayBookings = async (req, res) => {
 exports.getAllBookings = async (req, res) => {
   try {
     const filter = {};
-    if (req.query.all !== "true") {
-      filter.status = "pending";
-    }
+    if (req.query.all !== "true") filter.status = "pending";
 
     const bookings = await Booking.find(filter)
       .sort({ dateTime: 1 })
@@ -97,9 +92,8 @@ exports.getAllBookings = async (req, res) => {
 exports.completeBooking = async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
-    if (!booking) {
+    if (!booking)
       return res.status(404).json({ message: "Booking not found." });
-    }
     booking.status = "completed";
     await booking.save();
     res.json({ message: "Booking marked as completed.", booking });
@@ -108,56 +102,61 @@ exports.completeBooking = async (req, res) => {
   }
 };
 
-//receives date as (YYYY-MM-DD) and serviceID as query params
 exports.getAvailableSlots = async (req, res) => {
   const { date, serviceId } = req.query;
   if (!date || !serviceId) {
     return res.status(400).json({ message: "Missing date or serviceId." });
   }
 
-  // search for the duration of the desired service
   const service = await Service.findById(serviceId);
   if (!service) {
     return res.status(404).json({ message: "Service not found." });
   }
-  const desiredDuration = service.duration; // em minutos
+  const desiredDuration = service.duration;
 
-  //defines the start/end of the da
-  const dayStart = new Date(`${date}T00:00:00`);
-  const dayEnd = new Date(`${date}T23:59:59`);
+  const [year, month, day] = date.split("-").map(Number);
+  const dayDate = new Date(year, month - 1, day);
+  const dayKey = `${year.toString().padStart(4, "0")}-${month
+    .toString()
+    .padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+  const weekday = dayDate.getDay().toString(); // '0'..'6'
 
-  //search for today's booking e populate duration
+  let hours = await WorkingHours.findOne({ type: "exception", day: dayKey });
+  if (!hours) {
+    hours = await WorkingHours.findOne({ type: "weekly", day: weekday });
+  }
+  if (!hours || hours.startHour >= hours.endHour) {
+    return res.json([]);
+  }
+
+  const cursor = new Date(dayDate);
+  cursor.setHours(hours.startHour, 0, 0, 0);
+  const closing = new Date(dayDate);
+  closing.setHours(hours.endHour, 0, 0, 0);
+
   const bookings = await Booking.find({
-    dateTime: { $gte: dayStart, $lte: dayEnd },
+    dateTime: { $gte: cursor, $lte: closing },
   }).populate("service", "duration");
 
-  //mounts the occupied intervals list
   const occupied = bookings.map((b) => {
     const start = b.dateTime.getTime();
     const end = start + b.service.duration * 60000;
     return { start, end };
   });
 
-  //checking overlaping
-  const overlaps = (aStart, aEnd, bStart, bEnd) =>
-    aStart < bEnd && bStart < aEnd;
-
-  //generates available slots in the working hours
   const slots = [];
-  let cursor = new Date(`${date}T08:00:00`);
-  const closing = new Date(`${date}T19:00:00`);
+  let pointer = cursor.getTime();
+  const endMs = closing.getTime();
 
-  while (cursor.getTime() + desiredDuration * 60000 <= closing.getTime()) {
-    const slotStart = cursor.getTime();
+  while (pointer + desiredDuration * 60000 <= endMs) {
+    const slotStart = pointer;
     const slotEnd = slotStart + desiredDuration * 60000;
 
-    const isFree = occupied.every(
-      ({ start, end }) => !overlaps(slotStart, slotEnd, start, end)
+    const free = occupied.every(
+      (o) => slotStart >= o.end || slotEnd <= o.start
     );
-    if (isFree) {
-      slots.push(new Date(slotStart).toISOString());
-    }
-    cursor = new Date(slotStart + desiredDuration * 60000);
+    if (free) slots.push(new Date(slotStart).toISOString());
+    pointer += desiredDuration * 60000;
   }
 
   return res.json(slots);
