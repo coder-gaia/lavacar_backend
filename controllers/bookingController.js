@@ -108,16 +108,15 @@ exports.getAvailableSlots = async (req, res) => {
     return res.status(400).json({ message: "Missing date or serviceId." });
   }
 
-  // 1) Parse da data e dayKey
   const [year, month, day] = date.split("-").map(Number);
-  // mês no JS é 0-indexed
+
   const dayKey = `${String(year).padStart(4, "0")}-${String(month).padStart(
     2,
     "0"
   )}-${String(day).padStart(2, "0")}`;
-  const weekday = new Date(year, month - 1, day).getDay().toString(); // "0".. "6"
+  const weekday = new Date(year, month - 1, day).getDay().toString();
 
-  // 2) Busca CustomSlot (exceções de horário com lista de slots exatos)
+  // Busca CustomSlot (exceções de horário com lista de slots exatos)
   const custom = await CustomSlot.findOne({ date: dayKey });
   if (custom) {
     const slots = custom.slots.map((slot) => {
@@ -129,14 +128,14 @@ exports.getAvailableSlots = async (req, res) => {
     return res.json(slots);
   }
 
-  // 3) Busca serviço
+  // Busca serviço
   const service = await Service.findById(serviceId);
   if (!service) {
     return res.status(404).json({ message: "Service not found." });
   }
   const desiredDuration = service.duration; // em minutos
 
-  // 4) Busca exceção em WorkingHours ou padrão semanal
+  //  Busca exceção em WorkingHours ou padrão semanal
   let hours = await WorkingHours.findOne({ type: "exception", day: dayKey });
   if (!hours) {
     hours = await WorkingHours.findOne({ type: "weekly", day: weekday });
@@ -146,7 +145,7 @@ exports.getAvailableSlots = async (req, res) => {
     return res.json([]);
   }
 
-  // 5) Define início e fim do expediente no timezone local
+  // Define início e fim do expediente no timezone local
   const startMs = new Date(
     year,
     month - 1,
@@ -166,7 +165,7 @@ exports.getAvailableSlots = async (req, res) => {
     0
   ).getTime();
 
-  // 6) Busca bookings existentes no intervalo
+  //  Busca bookings existentes no intervalo
   const bookings = await Booking.find({
     dateTime: {
       $gte: new Date(startMs),
@@ -175,14 +174,14 @@ exports.getAvailableSlots = async (req, res) => {
     status: "pending",
   }).populate("service", "duration");
 
-  // 7) Mapeia intervalos ocupados
+  // Mapeia intervalos ocupados
   const occupied = bookings.map((b) => {
     const bStart = b.dateTime.getTime();
     const bEnd = bStart + b.service.duration * 60000;
     return { start: bStart, end: bEnd };
   });
 
-  // 8) Gera slots livres
+  // Gera slots livres
   const slots = [];
   let pointer = startMs;
   while (pointer + desiredDuration * 60000 <= endMs) {
